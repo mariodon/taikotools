@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 using System.IO;
 using static TaikoCompression.TaikoCompression;
 
@@ -58,7 +57,7 @@ namespace psvita_l7ctool
         const int PaddingBoundary = 0x200;
 
         static void Main(string[] args)
-        {            
+        {
             if (args.Length == 0)
             {
                 Console.WriteLine("usage:");
@@ -76,9 +75,9 @@ namespace psvita_l7ctool
                 Environment.Exit(1);
             }
 
-            if(args[0] == "c")
+            if (args[0] == "c")
             {
-                PackL7CA(args[1], args[2] + ".l7c");
+                PackL7CA(args[1], args[2]);
             }
             else if (args[0] == "x")
             {
@@ -132,7 +131,7 @@ namespace psvita_l7ctool
                 {
                     int expectedFilesize = data.Length;
 
-                    if(expectedFilesize > 0xffffff)
+                    if (expectedFilesize > 0xffffff)
                     {
                         writer.Write(0x00000019);
                         writer.Write(expectedFilesize);
@@ -150,12 +149,11 @@ namespace psvita_l7ctool
         static void PackL7CA(string inputFoldername, string outputFilename)
         {
             MemoryStream headerSection = new MemoryStream();
-            MemoryStream dataSection = new MemoryStream();
             MemoryStream filesystemSection = new MemoryStream();
             MemoryStream fileEntriesSection = new MemoryStream();
             MemoryStream chunksSection = new MemoryStream();
             MemoryStream stringSection = new MemoryStream();
-            
+
             // Build folders and paths
             List<string> paths = new List<string>();
             List<string> fullpaths = new List<string>();
@@ -164,11 +162,11 @@ namespace psvita_l7ctool
                 var curpaths = new List<string>();
 
                 var path = file.Replace('\\', '/');
-                while(!String.IsNullOrWhiteSpace((path = Path.GetDirectoryName(path))))
+                while (!String.IsNullOrWhiteSpace((path = Path.GetDirectoryName(path))))
                 {
                     path = path.Replace('\\', '/');
 
-                    if(!paths.Contains(path))
+                    if (!paths.Contains(path))
                         curpaths.Add(path);
                 }
 
@@ -194,7 +192,7 @@ namespace psvita_l7ctool
                 {
                     var temp = Encoding.ASCII.GetBytes(path);
                     int offset = (int)writer.BaseStream.Position;
-                    
+
                     writer.Write((byte)temp.Length);
                     writer.Write(temp);
 
@@ -224,7 +222,7 @@ namespace psvita_l7ctool
                     entry.filenameOffset = stringTableMapping[Path.GetFileName(path)];
                     files.Add(path);
                 }
-                
+
                 entry.hash = Crc32.CalculateNamco(path.Replace("\\", "/"));
                 entry.timestamp = new FileInfo(path).LastWriteTime.ToFileTime();
                 entry.filename = path;
@@ -244,106 +242,109 @@ namespace psvita_l7ctool
                 }
             }
 
-            // Build file entries
-            List<L7CAFileEntry> fileEntries = new List<L7CAFileEntry>();
-            List<L7CAChunkEntry> chunkEntries = new List<L7CAChunkEntry>();
-            foreach (var fs in filesystemEntries)
+            using (BinaryWriter archiveWriter = new BinaryWriter(File.OpenWrite(outputFilename)))
             {
-                if (fs.id == 0xffffffff)
-                    continue;
+                // Write heading padding
+                archiveWriter.Write(new byte[PaddingBoundary]);
 
-
-                Console.WriteLine("Reading '{0}'...", fs.filename);
-
-                L7CAFileEntry entry = new L7CAFileEntry();
-                entry.chunkIdx = chunkEntries.Count;
-
-                var data = File.ReadAllBytes(fs.filename);
-                ushort chunks = 0;
-                for(int size = data.Length; size > 0; size -= MaxChunkSize)
+                // Build file entries
+                List<L7CAFileEntry> fileEntries = new List<L7CAFileEntry>();
+                List<L7CAChunkEntry> chunkEntries = new List<L7CAChunkEntry>();
+                foreach (var fs in filesystemEntries)
                 {
-                    L7CAChunkEntry chunkEntry = new L7CAChunkEntry();
-                    chunkEntry.chunkId = chunks++;
-                    chunkEntry.chunkSize = size > MaxChunkSize ? MaxChunkSize : size;
-                    chunkEntries.Add(chunkEntry);
+                    if (fs.id == 0xffffffff)
+                        continue;
+
+
+                    Console.WriteLine("Reading {0}...", fs.filename);
+
+                    L7CAFileEntry entry = new L7CAFileEntry();
+                    entry.chunkIdx = chunkEntries.Count;
+
+                    var data = File.ReadAllBytes(fs.filename);
+                    ushort chunks = 0;
+                    for (int size = data.Length; size > 0; size -= MaxChunkSize)
+                    {
+                        L7CAChunkEntry chunkEntry = new L7CAChunkEntry();
+                        chunkEntry.chunkId = chunks++;
+                        chunkEntry.chunkSize = size > MaxChunkSize ? MaxChunkSize : size;
+                        chunkEntries.Add(chunkEntry);
+                    }
+
+                    entry.chunkCount = chunks;
+                    entry.compressedFilesize = data.Length;
+                    entry.rawFilesize = data.Length;
+                    entry.crc32 = Crc32.Calculate(data);
+                    entry.offset = (int)archiveWriter.BaseStream.Position;
+
+                    // Write data to data table
+                    archiveWriter.Write(data);
+
+                    // Write padding
+                    archiveWriter.Write(new byte[(int)(PaddingBoundary - ((archiveWriter.BaseStream.Length - PaddingBoundary) % PaddingBoundary))]);
+
+                    fileEntries.Add(entry);
                 }
 
-                entry.chunkCount = chunks;
-                entry.compressedFilesize = data.Length;
-                entry.rawFilesize = data.Length;
-                entry.crc32 = Crc32.Calculate(data);
-                entry.offset = PaddingBoundary + (int)dataSection.Position;
-
-                // Write data to data table
-                dataSection.Write(data, 0, data.Length);
-
-                // Write padding
-                for(long p = PaddingBoundary - (dataSection.Length % PaddingBoundary); p > 0; p--)
-                    dataSection.Write(new byte[1] { 0 }, 0, 1);
-
-                fileEntries.Add(entry);
-            }
-
-            // Write file entries section data
-            using (BinaryWriter writer = new BinaryWriter(fileEntriesSection, Encoding.ASCII, true))
-            {
-                foreach (var entry in fileEntries)
+                // Write file entries section data
+                using (BinaryWriter writer = new BinaryWriter(fileEntriesSection, Encoding.ASCII, true))
                 {
-                    writer.Write(entry.compressedFilesize);
-                    writer.Write(entry.rawFilesize);
-                    writer.Write(entry.chunkIdx);
-                    writer.Write(entry.chunkCount);
-                    writer.Write(entry.offset);
-                    writer.Write(entry.crc32);
+                    foreach (var entry in fileEntries)
+                    {
+                        writer.Write(entry.compressedFilesize);
+                        writer.Write(entry.rawFilesize);
+                        writer.Write(entry.chunkIdx);
+                        writer.Write(entry.chunkCount);
+                        writer.Write(entry.offset);
+                        writer.Write(entry.crc32);
+                    }
                 }
-            }
 
-            // Write chunk section data
-            using (BinaryWriter writer = new BinaryWriter(chunksSection, Encoding.ASCII, true))
-            {
-                foreach (var entry in chunkEntries)
+                // Write chunk section data
+                using (BinaryWriter writer = new BinaryWriter(chunksSection, Encoding.ASCII, true))
                 {
-                    writer.Write(entry.chunkSize);
-                    writer.Write(entry.unk);
-                    writer.Write(entry.chunkId);
+                    foreach (var entry in chunkEntries)
+                    {
+                        writer.Write(entry.chunkSize);
+                        writer.Write(entry.unk);
+                        writer.Write(entry.chunkId);
+                    }
                 }
-            }
 
-            L7CAHeader header = new L7CAHeader();
-            header.archiveSize = (int)(PaddingBoundary + dataSection.Length + filesystemSection.Length + fileEntriesSection.Length + chunksSection.Length + stringSection.Length);
-            header.metadataOffset = (int)(PaddingBoundary + dataSection.Length);
-            header.metadataSize = (int)(filesystemSection.Length + fileEntriesSection.Length + chunksSection.Length + stringSection.Length);
-            header.filesystemEntries = filesystemEntries.Count;
-            header.folders = folders.Count;
-            header.files = files.Count;
-            header.chunks = chunkEntries.Count;
-            header.stringTableSize = (int)stringSection.Length;
+                Console.WriteLine("Writing {0}...", outputFilename);
 
-            Console.WriteLine("Writing '{0}'...", outputFilename);
-            using (BinaryWriter writer = new BinaryWriter(File.OpenWrite(outputFilename)))
-            {
-                writer.Write(header.magic);
-                writer.Write(header.unk);
-                writer.Write(header.archiveSize);
-                writer.Write(header.metadataOffset);
-                writer.Write(header.metadataSize);
-                writer.Write(header.unk2);
-                writer.Write(header.filesystemEntries);
-                writer.Write(header.folders);
-                writer.Write(header.files);
-                writer.Write(header.chunks);
-                writer.Write(header.stringTableSize);
-                writer.Write(header.unk4);
 
-                // Write padding
-                for (long p = PaddingBoundary - (0x30 % PaddingBoundary); p > 0; p--)
-                    writer.Write(new byte[1] { 0 }, 0, 1);
+                L7CAHeader header = new L7CAHeader();
+                header.metadataOffset = (int)(archiveWriter.BaseStream.Position);
+                header.archiveSize = (int)(header.metadataOffset + filesystemSection.Length + fileEntriesSection.Length + chunksSection.Length + stringSection.Length);
+                header.metadataSize = (int)(filesystemSection.Length + fileEntriesSection.Length + chunksSection.Length + stringSection.Length);
+                header.filesystemEntries = filesystemEntries.Count;
+                header.folders = folders.Count;
+                header.files = files.Count;
+                header.chunks = chunkEntries.Count;
+                header.stringTableSize = (int)stringSection.Length;
+                archiveWriter.BaseStream.Seek(0, SeekOrigin.Begin);
+                archiveWriter.Write(header.magic);
+                archiveWriter.Write(header.unk);
+                archiveWriter.Write(header.archiveSize);
+                archiveWriter.Write(header.metadataOffset);
+                archiveWriter.Write(header.metadataSize);
+                archiveWriter.Write(header.unk2);
+                archiveWriter.Write(header.filesystemEntries);
+                archiveWriter.Write(header.folders);
+                archiveWriter.Write(header.files);
+                archiveWriter.Write(header.chunks);
+                archiveWriter.Write(header.stringTableSize);
+                archiveWriter.Write(header.unk4);
 
-                writer.Write(dataSection.GetBuffer(), 0, (int)dataSection.Length);
-                writer.Write(filesystemSection.GetBuffer(), 0, (int)filesystemSection.Length);
-                writer.Write(fileEntriesSection.GetBuffer(), 0, (int)fileEntriesSection.Length);
-                writer.Write(chunksSection.GetBuffer(), 0, (int)chunksSection.Length);
-                writer.Write(stringSection.GetBuffer(), 0, (int)stringSection.Length);
+                archiveWriter.BaseStream.Seek(0, SeekOrigin.End);
+
+                // Write file info sections
+                archiveWriter.Write(filesystemSection.GetBuffer(), 0, (int)filesystemSection.Length);
+                archiveWriter.Write(fileEntriesSection.GetBuffer(), 0, (int)fileEntriesSection.Length);
+                archiveWriter.Write(chunksSection.GetBuffer(), 0, (int)chunksSection.Length);
+                archiveWriter.Write(stringSection.GetBuffer(), 0, (int)stringSection.Length);
+
             }
         }
 
@@ -397,12 +398,33 @@ namespace psvita_l7ctool
                     entry.folderOffset = reader.ReadInt32();
                     entry.filenameOffset = reader.ReadInt32();
                     entry.timestamp = reader.ReadInt64();
-                    entry.filename = String.Format("{0}/{1}", strings[entry.folderOffset], strings[entry.filenameOffset]);
+
+                    if(entry.id == 0xffffffff)
+                        entry.filename = String.Format("{0}", strings[entry.folderOffset]);
+                    else
+                        entry.filename = String.Format("{0}/{1}", strings[entry.folderOffset], strings[entry.filenameOffset]);
 
                     //Console.WriteLine("{0:x8} {1:x8} {2:x8} {3:x8} {4:x16}", entry.id, entry.hash, entry.folderOffset, entry.filenameOffset, entry.timestamp);
 
-                    if (entry.id != 0xffffffff) // Not a folder
+                    if (Crc32.CalculateNamco(entry.filename) != entry.hash)
+                    {
+                        Console.WriteLine("{0} did not match expected hash", entry.filename);
+                    }
+
+                    if (entry.id != 0xffffffff)
+                    {
                         entries.Add(entry.id, entry);
+                    }
+                    else
+                    {
+                        // 0xffffffff is a folder.
+                        // Only create a folder and move on to next entry.
+                        // This step probably isn't needed,  but just for the sake of completeness I added it.
+                        // There might be some game out there that has blank folders but no actual data in it, so those will be accounted for as well.
+
+                        if (!Directory.Exists(entry.filename))
+                            Directory.CreateDirectory(entry.filename);
+                    }
                 }
 
                 // Read file information
@@ -444,7 +466,7 @@ namespace psvita_l7ctool
 
                     //DEBUG_DECOMP = true;
 
-                    Console.WriteLine("Extracting '{0}'...", entry.filename);
+                    Console.WriteLine("Extracting {0}...", entry.filename);
                     //Console.WriteLine("{0:x1} {1:x8} {2:x8} {3:x8} {4:x8} {5:x8}", file.chunkIdx, file.chunkCount, file.offset, file.compressedFilesize, file.rawFilesize, file.crc32);
 
                     //var output = Path.Combine("output", entry.filename);
