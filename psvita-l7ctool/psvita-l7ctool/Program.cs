@@ -371,6 +371,10 @@ namespace psvita_l7ctool
                 header.stringTableSize = reader.ReadInt32();
                 header.unk4 = reader.ReadInt32();
 
+                if(header.unk4 != 0x05)
+                {
+                    Console.WriteLine("This archive type is unsupported and most likely won't unpack properly.");
+                }
 
                 // Read strings
                 var baseOffset = reader.BaseStream.Length - header.stringTableSize;
@@ -464,8 +468,6 @@ namespace psvita_l7ctool
                     var file = files[i];
                     var entry = entries[(uint)i];
 
-                    //DEBUG_DECOMP = true;
-
                     Console.WriteLine("Extracting {0}...", entry.filename);
                     //Console.WriteLine("{0:x1} {1:x8} {2:x8} {3:x8} {4:x8} {5:x8}", file.chunkIdx, file.chunkCount, file.offset, file.compressedFilesize, file.rawFilesize, file.crc32);
 
@@ -499,12 +501,21 @@ namespace psvita_l7ctool
 
                             if (DebugDecompressionCode)
                                 File.WriteAllBytes(String.Format("output-chunk-{0}.bin", x), d);
-
+                            
                             if (isCompressed)
                             {
-                                // Decompress chunk
-                                d = Decompress(d, data.ToArray());
-                                data = new List<byte>(d);
+                                try
+                                {
+                                    // Decompress chunk
+                                    d = Decompress(d, data.ToArray());
+                                    data = new List<byte>(d);
+                                }
+                                catch
+                                {
+                                    // Save compressed data
+                                    Console.WriteLine("Could not decompress file.");
+                                    data.AddRange(d);
+                                }
                             }
                             else
                             {
@@ -523,8 +534,8 @@ namespace psvita_l7ctool
                     {
                         Console.WriteLine("Invalid CRC32: {0:x8} vs {1:x8}", crc32, file.crc32);
                         Console.WriteLine();
-                        File.WriteAllBytes("invalid.bin", data.ToArray());
-
+                        
+                        //File.WriteAllBytes("invalid.bin", data.ToArray());
                         //Environment.Exit(1);
                     }
 
@@ -533,7 +544,7 @@ namespace psvita_l7ctool
                     if (data.Count != file.rawFilesize)
                     {
                         Console.WriteLine("Invalid filesize: {0:x8} vs {1:x8}", data.Count, file.rawFilesize);
-                        Environment.Exit(1);
+                        //Environment.Exit(1);
                     }
                 }
             }
