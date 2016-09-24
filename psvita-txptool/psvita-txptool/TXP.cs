@@ -109,13 +109,16 @@ namespace psvita_txptool
             writer.Write(new byte[CalculatePadding(0x80, (int)writer.BaseStream.Length)]); // Pad the filename section to the nearest 0x80th byte
 
             // Image data
+            _entries.Sort((x, y) => x.FileIndexA.CompareTo(y.FileIndexA));
             for (int i = 0; i < _entries.Count; i++)
             {
                 var entry = _entries[i];
                 var curOffset = writer.BaseStream.Position;
-
+                
                 // Fix texture data offset in section 1
-                writer.BaseStream.Seek(0x20 * (i+1) + 0x0c, SeekOrigin.Begin);
+                writer.BaseStream.Seek(0x20 * (i + 1) + 0x04, SeekOrigin.Begin);
+                writer.Write(entry.TextureRawData.Length);
+                writer.BaseStream.Seek(0x20 * (i + 1) + 0x0c, SeekOrigin.Begin);
                 writer.Write((int)curOffset);
                 writer.BaseStream.Seek(curOffset, SeekOrigin.Begin);
 

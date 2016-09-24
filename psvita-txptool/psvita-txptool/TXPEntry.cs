@@ -63,7 +63,8 @@ namespace psvita_txptool
         public void Write(BinaryWriter writer)
         {
             writer.Write(0); // Temporary. Will come back to write correct data later when filenames have been written into the data
-            writer.Write((long)TextureRawData.Length);
+            writer.Write(TextureRawData.Length);
+            writer.Write(0); // No palette
             writer.Write(0); // Temporary
             writer.Write(Format);
             writer.Write(Width);
